@@ -53,5 +53,14 @@
 			interrupt-controller;
 			#interrupt-cells = <2>;
 		};
+
+		pm8350b_haptics: haptics@f000 {
+			compatible = "qcom,spmi-haptics";
+			reg = <0xf000>, <0xf100>;
+			reg-names = "cfg", "ptn";
+			interrupts = <0x3 0xf0 0x1 IRQ_TYPE_EDGE_RISING>;
+			interrupt-names = "fifo-empty";
+			status = "disabled";
+		};
 	};
 };
