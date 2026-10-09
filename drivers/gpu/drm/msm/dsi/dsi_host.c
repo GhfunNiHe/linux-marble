@@ -166,6 +166,7 @@ struct msm_dsi_host {
 
 	struct drm_display_mode *mode;
 	struct drm_dsc_config *dsc;
+	unsigned int dsc_slice_per_pkt;
 
 	/* connected device info */
 	unsigned int channel;
@@ -616,8 +617,8 @@ dsi_adjust_pclk_for_compression(const struct drm_display_mode *mode,
 	if (is_bonded_dsi)
 		hdisplay /= 2;
 
-	new_hdisplay = DIV_ROUND_UP(hdisplay * drm_dsc_get_bpp_int(dsc),
-				    dsc->bits_per_component * 3);
+	/* 24 bits per pclk on the DPU->DSI bus, independent of bpc */
+	new_hdisplay = DIV_ROUND_UP(hdisplay * drm_dsc_get_bpp_int(dsc), 24);
 
 	if (is_bonded_dsi)
 		new_hdisplay *= 2;
@@ -952,17 +953,12 @@ static void dsi_update_dsc_timing(struct msm_dsi_host *msm_host, bool is_cmd_mod
 	slice_per_intf = dsc->slice_count;
 
 	total_bytes_per_intf = dsc->slice_chunk_size * slice_per_intf;
-	bytes_per_pkt = dsc->slice_chunk_size; /* * slice_per_pkt; */
+	bytes_per_pkt = dsc->slice_chunk_size * msm_host->dsc_slice_per_pkt;
 
 	eol_byte_num = total_bytes_per_intf % 3;
 
-	/*
-	 * Typically, pkt_per_line = slice_per_intf * slice_per_pkt.
-	 *
-	 * Since the current driver only supports slice_per_pkt = 1,
-	 * pkt_per_line will be equal to slice per intf for now.
-	 */
-	pkt_per_line = slice_per_intf;
+	/* e.g. 2 slices/line sent as 1 packet of 2 slices (marble panel) */
+	pkt_per_line = slice_per_intf / msm_host->dsc_slice_per_pkt;
 
 	if (is_cmd_mode) /* packet data type */
 		reg = DSI_COMMAND_COMPRESSION_MODE_CTRL_STREAM0_DATATYPE(MIPI_DSI_DCS_LONG_WRITE);
@@ -1073,8 +1069,12 @@ static void dsi_timing_setup(struct msm_dsi_host *msm_host, bool is_bonded_dsi)
 		 */
 		h_total -= hdisplay;
 		if (wide_bus_enabled) {
+			/*
+			 * marble: keep video mode at 24 bits per pclk to match
+			 * the DPU timing and pclk adjustment (proven on 10bpc).
+			 */
 			if (msm_host->mode_flags & MIPI_DSI_MODE_VIDEO)
-				bits_per_pclk = dsc->bits_per_component * 3;
+				bits_per_pclk = 24;
 			else
 				bits_per_pclk = 48;
 		} else {
@@ -1734,6 +1734,7 @@ static int dsi_host_attach(struct mipi_dsi_host *host,
 	msm_host->mode_flags = dsi->mode_flags;
 	if (dsi->dsc)
 		msm_host->dsc = dsi->dsc;
+	msm_host->dsc_slice_per_pkt = dsi->dsc_slice_per_pkt ?: 1;
 
 	if (msm_host->format == MIPI_DSI_FMT_RGB101010) {
 		if (!msm_dsi_host_version_geq(msm_host, MSM_DSI_VER_MAJOR_6G,
@@ -1913,11 +1914,16 @@ static int dsi_populate_dsc_params(struct msm_dsi_host *msm_host, struct drm_dsc
 	drm_dsc_set_const_params(dsc);
 	drm_dsc_set_rc_buf_thresh(dsc);
 
-	/* DPU supports only pre-SCR panels */
-	ret = drm_dsc_setup_rc_params(dsc, DRM_DSC_1_1_PRE_SCR);
-	if (ret) {
-		DRM_DEV_ERROR(&msm_host->pdev->dev, "could not find DSC RC parameters\n");
-		return ret;
+	/*
+	 * Some panels (e.g. Novatek DDICs) have a fixed decoder config and
+	 * provide matching RC parameters themselves; don't overwrite them.
+	 */
+	if (!dsc->rc_range_params[DSC_NUM_BUF_RANGES - 1].range_max_qp) {
+		ret = drm_dsc_setup_rc_params(dsc, DRM_DSC_1_1_PRE_SCR);
+		if (ret) {
+			DRM_DEV_ERROR(&msm_host->pdev->dev, "could not find DSC RC parameters\n");
+			return ret;
+		}
 	}
 
 	dsc->initial_scale_value = drm_dsc_initial_scale_value(dsc);
