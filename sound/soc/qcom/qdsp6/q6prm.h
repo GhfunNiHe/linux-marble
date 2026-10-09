@@ -15,6 +15,8 @@
 #define Q6PRM_LPASS_CLK_ID_TER_MI2S_IBIT                          0x104
 /* Clock ID for Tertiary I2S EBIT */
 #define Q6PRM_LPASS_CLK_ID_TER_MI2S_EBIT                          0x105
+#define Q6PRM_LPASS_CLK_ID_TER_TDM_IBIT                           0x204
+#define Q6PRM_LPASS_CLK_ID_TER_TDM_EBIT                           0x205
 /* Clock ID for Quartnery I2S IBIT */
 #define Q6PRM_LPASS_CLK_ID_QUAD_MI2S_IBIT                         0x106
 /* Clock ID for Quartnery I2S EBIT */

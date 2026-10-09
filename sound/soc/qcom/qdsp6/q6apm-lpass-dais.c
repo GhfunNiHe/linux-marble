@@ -261,6 +261,33 @@ static int q6i2s_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	return 0;
 }
 
+static int q6tdm_set_tdm_slot(struct snd_soc_dai *dai, unsigned int tx_mask,
+			      unsigned int rx_mask, int slots, int slot_width)
+{
+	struct q6apm_lpass_dai_data *dai_data = dev_get_drvdata(dai->dev);
+	struct audioreach_module_config *cfg = &dai_data->module_config[dai->id];
+
+	if (slots > 32 || (slot_width != 16 && slot_width != 24 && slot_width != 32))
+		return -EINVAL;
+
+	cfg->tdm_nslots = slots;
+	cfg->tdm_slot_width = slot_width;
+	/* Odd port ids are TX (capture) */
+	cfg->tdm_slot_mask = (dai->id & 0x1) ? tx_mask : rx_mask;
+
+	return 0;
+}
+
+static const struct snd_soc_dai_ops q6tdm_ops = {
+	.prepare	= q6apm_lpass_dai_prepare,
+	.startup	= q6apm_lpass_dai_startup,
+	.shutdown	= q6apm_lpass_dai_shutdown,
+	.hw_params	= q6dma_hw_params,
+	.set_fmt	= q6i2s_set_fmt,
+	.set_tdm_slot	= q6tdm_set_tdm_slot,
+	.trigger	= q6apm_lpass_dai_trigger,
+};
+
 static const struct snd_soc_dai_ops q6dma_ops = {
 	.prepare	= q6apm_lpass_dai_prepare,
 	.startup	= q6apm_lpass_dai_startup,
@@ -313,6 +340,7 @@ static int q6apm_lpass_dai_dev_probe(struct platform_device *pdev)
 
 	memset(&cfg, 0, sizeof(cfg));
 	cfg.q6i2s_ops = &q6i2s_ops;
+	cfg.q6tdm_ops = &q6tdm_ops;
 	cfg.q6dma_ops = &q6dma_ops;
 	cfg.q6hdmi_ops = &q6hdmi_ops;
 	dais = q6dsp_audio_ports_set_config(dev, &cfg, &num_dais);
