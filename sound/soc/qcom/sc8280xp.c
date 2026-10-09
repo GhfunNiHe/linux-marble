@@ -2,6 +2,7 @@
 // Copyright (c) 2022, Linaro Limited
 
 #include <dt-bindings/sound/qcom,q6afe.h>
+#include <linux/clk.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <sound/soc.h>
@@ -15,9 +16,19 @@
 #include "common.h"
 #include "sdw.h"
 
+#define SC8280XP_TDM_ACTIVE_SLOTS	2
+
 struct sc8280xp_snd_data {
 	bool stream_prepared[AFE_PORT_MAX];
 	struct snd_soc_card *card;
+	/* Optional, for boards whose TDM interface needs a HLOS clock vote */
+	struct clk *tdm_vote;
+	struct clk *tdm_bclk;
+	/* TDM backend layout, from DT (defaults: 2 x 32 bit I2S at 48 kHz) */
+	u32 tdm_slots;
+	u32 tdm_slot_width;
+	u32 tdm_rate;
+	unsigned int tdm_fmt;
 	struct snd_soc_jack jack;
 	struct snd_soc_jack dp_jack[8];
 	bool jack_setup;
@@ -36,6 +47,20 @@ static int sc8280xp_snd_init(struct snd_soc_pcm_runtime *rtd)
 	case QUINARY_MI2S_RX...QUINARY_MI2S_TX:
 		snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_BP_FP);
 		break;
+	case PRIMARY_TDM_RX_0...QUINARY_TDM_TX_7: {
+		struct snd_soc_dai *codec_dai;
+		unsigned int mask = GENMASK(SC8280XP_TDM_ACTIVE_SLOTS - 1, 0);
+		int i;
+
+		snd_soc_dai_set_fmt(cpu_dai, SND_SOC_DAIFMT_BP_FP |
+				    data->tdm_fmt | SND_SOC_DAIFMT_NB_NF);
+		snd_soc_dai_set_tdm_slot(cpu_dai, mask, mask, data->tdm_slots,
+					 data->tdm_slot_width);
+		for_each_rtd_codec_dais(rtd, i, codec_dai)
+			snd_soc_dai_set_fmt(codec_dai, SND_SOC_DAIFMT_BC_FC |
+					    SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF);
+		return 0;
+	}
 	case WSA_CODEC_DMA_RX_0:
 	case WSA_CODEC_DMA_RX_1:
 		/*
@@ -70,6 +95,7 @@ static int sc8280xp_snd_init(struct snd_soc_pcm_runtime *rtd)
 static int sc8280xp_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 				     struct snd_pcm_hw_params *params)
 {
+	struct sc8280xp_snd_data *data = snd_soc_card_get_drvdata(rtd->card);
 	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
 	struct snd_interval *rate = hw_param_interval(params,
 					SNDRV_PCM_HW_PARAM_RATE);
@@ -82,6 +108,15 @@ static int sc8280xp_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 	channels->min = 2;
 	channels->max = 2;
 	switch (cpu_dai->id) {
+	case PRIMARY_TDM_RX_0...QUINARY_TDM_TX_7:
+		rate->min = rate->max = data->tdm_rate;
+		fallthrough;
+	case PRIMARY_MI2S_RX...QUATERNARY_MI2S_TX:
+	case QUINARY_MI2S_RX...QUINARY_MI2S_TX:
+		/* Smart amps such as AW88261 expect 32-bit slots (BCLK = 64 * fs) */
+		snd_mask_none(fmt);
+		snd_mask_set_format(fmt, SNDRV_PCM_FORMAT_S32_LE);
+		break;
 	case TX_CODEC_DMA_TX_0:
 	case TX_CODEC_DMA_TX_1:
 	case TX_CODEC_DMA_TX_2:
@@ -114,9 +149,53 @@ static int sc8280xp_snd_hw_free(struct snd_pcm_substream *substream)
 	return qcom_snd_sdw_hw_free(substream, &data->stream_prepared[cpu_dai->id]);
 }
 
+static bool sc8280xp_is_tdm(struct snd_soc_dai *cpu_dai)
+{
+	return cpu_dai->id >= PRIMARY_TDM_RX_0 && cpu_dai->id <= QUINARY_TDM_TX_7;
+}
+
+static int sc8280xp_snd_startup(struct snd_pcm_substream *substream)
+{
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+	struct sc8280xp_snd_data *data = snd_soc_card_get_drvdata(rtd->card);
+	int ret;
+
+	if (sc8280xp_is_tdm(cpu_dai)) {
+		ret = clk_prepare_enable(data->tdm_vote);
+		if (ret)
+			return ret;
+
+		ret = clk_set_rate(data->tdm_bclk,
+				   data->tdm_rate * data->tdm_slots * data->tdm_slot_width);
+		if (!ret)
+			ret = clk_prepare_enable(data->tdm_bclk);
+		if (ret) {
+			clk_disable_unprepare(data->tdm_vote);
+			return ret;
+		}
+	}
+
+	return qcom_snd_sdw_startup(substream);
+}
+
+static void sc8280xp_snd_shutdown(struct snd_pcm_substream *substream)
+{
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+	struct sc8280xp_snd_data *data = snd_soc_card_get_drvdata(rtd->card);
+
+	qcom_snd_sdw_shutdown(substream);
+
+	if (sc8280xp_is_tdm(cpu_dai)) {
+		clk_disable_unprepare(data->tdm_bclk);
+		clk_disable_unprepare(data->tdm_vote);
+	}
+}
+
 static const struct snd_soc_ops sc8280xp_be_ops = {
-	.startup = qcom_snd_sdw_startup,
-	.shutdown = qcom_snd_sdw_shutdown,
+	.startup = sc8280xp_snd_startup,
+	.shutdown = sc8280xp_snd_shutdown,
 	.hw_free = sc8280xp_snd_hw_free,
 	.prepare = sc8280xp_snd_prepare,
 };
@@ -140,6 +219,7 @@ static int sc8280xp_platform_probe(struct platform_device *pdev)
 	struct snd_soc_card *card;
 	struct sc8280xp_snd_data *data;
 	struct device *dev = &pdev->dev;
+	const char *tdm_fmt;
 	int ret;
 
 	card = devm_kzalloc(dev, sizeof(*card), GFP_KERNEL);
@@ -150,6 +230,30 @@ static int sc8280xp_platform_probe(struct platform_device *pdev)
 	data = devm_kzalloc(dev, sizeof(*data), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
+
+	data->tdm_vote = devm_clk_get_optional(dev, "tdm-vote");
+	if (IS_ERR(data->tdm_vote))
+		return dev_err_probe(dev, PTR_ERR(data->tdm_vote), "failed to get tdm-vote clock\n");
+
+	data->tdm_bclk = devm_clk_get_optional(dev, "tdm-bclk");
+	if (IS_ERR(data->tdm_bclk))
+		return dev_err_probe(dev, PTR_ERR(data->tdm_bclk), "failed to get tdm-bclk clock\n");
+
+	data->tdm_slots = 2;
+	data->tdm_slot_width = 32;
+	data->tdm_rate = 48000;
+	data->tdm_fmt = SND_SOC_DAIFMT_I2S;
+	of_property_read_u32(dev->of_node, "qcom,tdm-slots", &data->tdm_slots);
+	of_property_read_u32(dev->of_node, "qcom,tdm-slot-width", &data->tdm_slot_width);
+	of_property_read_u32(dev->of_node, "qcom,tdm-rate", &data->tdm_rate);
+	if (!of_property_read_string(dev->of_node, "qcom,tdm-format", &tdm_fmt)) {
+		if (!strcmp(tdm_fmt, "dsp_a"))
+			data->tdm_fmt = SND_SOC_DAIFMT_DSP_A;
+		else if (!strcmp(tdm_fmt, "dsp_b"))
+			data->tdm_fmt = SND_SOC_DAIFMT_DSP_B;
+		else if (strcmp(tdm_fmt, "i2s"))
+			return dev_err_probe(dev, -EINVAL, "invalid qcom,tdm-format\n");
+	}
 
 	card->dev = dev;
 	dev_set_drvdata(dev, card);
