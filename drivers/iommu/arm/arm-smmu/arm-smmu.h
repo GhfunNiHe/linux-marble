@@ -384,6 +384,7 @@ struct arm_smmu_domain {
 	enum arm_smmu_domain_stage	stage;
 	struct mutex			init_mutex; /* Protects smmu pointer */
 	spinlock_t			cb_lock; /* Serialises ATS1* ops and TLB syncs */
+	u32				secure_vmid; /* 0: page tables owned by HLOS only */
 	struct iommu_domain		domain;
 };
 

@@ -8,11 +8,14 @@
 #include <linux/delay.h>
 #include <linux/of_device.h>
 #include <linux/firmware/qcom/qcom_scm.h>
+#include <linux/gfp.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 
 #include "arm-smmu.h"
 #include "arm-smmu-qcom.h"
+
+#include <dt-bindings/firmware/qcom,scm.h>
 
 #define QCOM_DUMMY_VAL	-1
 
@@ -429,6 +432,68 @@ static const struct of_device_id qcom_smmu_client_of_match[] __maybe_unused = {
 	{ }
 };
 
+/*
+ * Context banks for stream IDs that the hypervisor routes through the stage-2
+ * tables of another VM (e.g. the video "secure non-pixel" SID, VMID
+ * CP_NON_PIXEL) walk their stage-1 tables as that VM. Share every table page
+ * read-only with it, as the downstream kernel does; HLOS keeps read/write
+ * access so io-pgtable can update the entries.
+ */
+static void *qcom_smmu_vmid_pgtable_alloc(void *cookie, size_t size, gfp_t gfp)
+{
+	struct arm_smmu_domain *smmu_domain = cookie;
+	struct qcom_scm_vmperm perms[] = {
+		{ .vmid = QCOM_SCM_VMID_HLOS, .perm = QCOM_SCM_PERM_RW },
+		{ .vmid = smmu_domain->secure_vmid, .perm = QCOM_SCM_PERM_READ },
+	};
+	u64 src = BIT(QCOM_SCM_VMID_HLOS);
+	void *pages;
+	int ret;
+
+	/* The SCM call sleeps */
+	if (!gfpflags_allow_blocking(gfp))
+		return NULL;
+
+	size = PAGE_ALIGN(size);
+	pages = alloc_pages_exact(size, gfp | __GFP_ZERO);
+	if (!pages)
+		return NULL;
+
+	ret = qcom_scm_assign_mem(virt_to_phys(pages), size, &src, perms,
+				  ARRAY_SIZE(perms));
+	if (ret) {
+		dev_err(smmu_domain->smmu->dev,
+			"failed to share page table with VMID %u: %d\n",
+			smmu_domain->secure_vmid, ret);
+		free_pages_exact(pages, size);
+		return NULL;
+	}
+
+	return pages;
+}
+
+static void qcom_smmu_vmid_pgtable_free(void *cookie, void *pages, size_t size)
+{
+	struct arm_smmu_domain *smmu_domain = cookie;
+	struct qcom_scm_vmperm perm = {
+		.vmid = QCOM_SCM_VMID_HLOS, .perm = QCOM_SCM_PERM_RWX,
+	};
+	u64 src = BIT(QCOM_SCM_VMID_HLOS) | BIT(smmu_domain->secure_vmid);
+	int ret;
+
+	size = PAGE_ALIGN(size);
+	ret = qcom_scm_assign_mem(virt_to_phys(pages), size, &src, &perm, 1);
+	if (ret) {
+		/* Leak the pages rather than hand them back while still shared */
+		dev_err(smmu_domain->smmu->dev,
+			"failed to reclaim page table from VMID %u: %d\n",
+			smmu_domain->secure_vmid, ret);
+		return;
+	}
+
+	free_pages_exact(pages, size);
+}
+
 static int qcom_smmu_init_context(struct arm_smmu_domain *smmu_domain,
 		struct io_pgtable_cfg *pgtbl_cfg, struct device *dev)
 {
@@ -436,8 +501,16 @@ static int qcom_smmu_init_context(struct arm_smmu_domain *smmu_domain,
 	struct qcom_smmu *qsmmu = to_qcom_smmu(smmu);
 	const struct of_device_id *client_match;
 	int cbndx = smmu_domain->cfg.cbndx;
+	u32 vmid;
 
 	smmu_domain->cfg.flush_walk_prefer_tlbiasid = true;
+
+	if (dev && !of_property_read_u32(dev->of_node, "qcom,iommu-vmid", &vmid) &&
+	    vmid && vmid < 64) {
+		smmu_domain->secure_vmid = vmid;
+		pgtbl_cfg->alloc = qcom_smmu_vmid_pgtable_alloc;
+		pgtbl_cfg->free = qcom_smmu_vmid_pgtable_free;
+	}
 
 	client_match = qsmmu->data->client_match;
 
