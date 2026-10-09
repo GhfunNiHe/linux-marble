@@ -3,6 +3,7 @@
  * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
+#include <linux/moduleparam.h>
 #include <linux/printk.h>
 #include <linux/soc/qcom/ubwc.h>
 
@@ -265,10 +266,14 @@ void iris_hfi_gen2_packet_session_property(struct iris_inst *inst,
 				    payload_size);
 }
 
+static bool no_ifpc;
+module_param(no_ifpc, bool, 0644);
+MODULE_PARM_DESC(no_ifpc, "debug: disable firmware inter-frame power collapse");
+
 void iris_hfi_gen2_packet_sys_interframe_powercollapse(struct iris_core *core,
 						       struct iris_hfi_header *hdr)
 {
-	u32 payload = 1; /* HFI_TRUE */
+	u32 payload = no_ifpc ? 0 : 1; /* HFI_TRUE */
 
 	iris_hfi_gen2_create_header(hdr, 0 /*session_id*/, core->header_id++);
 

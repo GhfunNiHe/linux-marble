@@ -6,6 +6,7 @@
 #ifndef __IRIS_CORE_H__
 #define __IRIS_CORE_H__
 
+#include <linux/sizes.h>
 #include <linux/types.h>
 #include <linux/pm_domain.h>
 #include <media/v4l2-device.h>
@@ -79,6 +80,37 @@ struct qcom_ubwc_cfg_data;
  * @inst_fw_caps_enc: an array of supported instance capabilities by encoder
  */
 
+/**
+ * struct iris_arp_pool - encoder ARP buffers in the secure non-pixel region
+ *
+ * VPU2 firmware expects the encoder ARP buffer inside the CP non-pixel IOVA
+ * range, which the VPU accesses through the "secure non-pixel" stream ID with
+ * the stage-2 tables of VMID CP_NON_PIXEL. The memory comes from a no-map
+ * carveout handed to that VM and mapped through a separate context bank
+ * (child DT node "non-pixel"), one slot per encoder session.
+ *
+ * @dev: child device carrying the secure non-pixel stream ID
+ * @domain: IOMMU domain of @dev
+ * @base: physical base of the carveout
+ * @size: carveout size (whole slots)
+ * @iova_top: end of the CP non-pixel IOVA range; slot i ends at
+ *	      @iova_top - i * IRIS_ARP_SLOT_SIZE
+ * @used: bitmap of slots in use (atomic bitops)
+ * @required: the DT describes the region, so the encoder must not fall back
+ *	      to an ordinary ARP buffer (the VPU2 firmware resets the SoC)
+ */
+struct iris_arp_pool {
+	struct device		*dev;
+	struct iommu_domain	*domain;
+	phys_addr_t		base;
+	size_t			size;
+	u32			iova_top;
+	unsigned long		used;
+	bool			required;
+};
+
+#define IRIS_ARP_SLOT_SIZE	SZ_256K
+
 struct iris_core {
 	struct device				*dev;
 	void __iomem				*reg_base;
@@ -123,9 +155,12 @@ struct iris_core {
 	/* encoder and decoder have overlapping caps, so two different arrays are required */
 	struct platform_inst_fw_cap		inst_fw_caps_dec[INST_FW_CAP_MAX];
 	struct platform_inst_fw_cap		inst_fw_caps_enc[INST_FW_CAP_MAX];
+	struct iris_arp_pool			arp;
 };
 
 int iris_core_init(struct iris_core *core);
 void iris_core_deinit(struct iris_core *core);
+int iris_arp_pool_init(struct iris_core *core);
+void iris_arp_pool_deinit(struct iris_core *core);
 
 #endif

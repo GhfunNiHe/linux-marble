@@ -34,6 +34,14 @@ int iris_get_mbpf(struct iris_inst *inst)
 
 bool iris_split_mode_enabled(struct iris_inst *inst)
 {
+	/*
+	 * VPU2 (HFI Gen2) firmware has no OPB: UBWC output is written straight
+	 * to the output buffers without separate DPB buffers.
+	 */
+	if (inst->core->iris_platform_data->no_opb &&
+	    inst->fmt_dst->fmt.pix_mp.pixelformat == V4L2_PIX_FMT_QC08C)
+		return false;
+
 	return inst->fmt_dst->fmt.pix_mp.pixelformat == V4L2_PIX_FMT_NV12 ||
 		inst->fmt_dst->fmt.pix_mp.pixelformat == V4L2_PIX_FMT_QC08C ||
 		inst->fmt_dst->fmt.pix_mp.pixelformat == V4L2_PIX_FMT_P010 ||

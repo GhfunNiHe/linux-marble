@@ -226,8 +226,9 @@ static int iris_hfi_gen2_handle_session_info(struct iris_inst *inst,
 		break;
 	}
 
-	dev_dbg(core->dev, "session info received %#x: %s\n",
-		pkt->type, info);
+	dev_info(core->dev, "session info received %#x: %s (pkt_id=%u, port=%u, flags=%#x, payload[0]=%#x)\n",
+		pkt->type, info, pkt->packet_id, pkt->port, pkt->flags,
+		pkt->size > sizeof(*pkt) ? pkt->payload[0] : 0);
 
 	return ret;
 }
@@ -265,7 +266,10 @@ static int iris_hfi_gen2_handle_session_error(struct iris_inst *inst,
 		break;
 	}
 
-	dev_err(core->dev, "session error received %#x: %s\n", pkt->type, error);
+	dev_err(core->dev, "session error received %#x (payload: %#x, %#x, port: %u): %s\n",
+		pkt->type, pkt->size > sizeof(*pkt) ? pkt->payload[0] : 0,
+		pkt->size > sizeof(*pkt) + 4 ? pkt->payload[1] : 0,
+		pkt->port, error);
 	iris_vb2_queue_error(inst);
 	iris_inst_change_state(inst, IRIS_INST_ERROR);
 
@@ -454,12 +458,18 @@ static int iris_hfi_gen2_handle_session_stop(struct iris_inst *inst,
 					     struct iris_hfi_packet *pkt)
 {
 	int ret = 0;
+	u32 plane;
 
-	if (pkt->port == HFI_PORT_RAW)
-		ret = iris_inst_sub_state_change_pause(inst, V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
-	else if (pkt->port == HFI_PORT_BITSTREAM)
-		ret = iris_inst_sub_state_change_pause(inst, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
+	if (inst->domain == DECODER)
+		plane = (pkt->port == HFI_PORT_RAW) ?
+			V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE :
+			V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+	else
+		plane = (pkt->port == HFI_PORT_RAW) ?
+			V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE :
+			V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 
+	ret = iris_inst_sub_state_change_pause(inst, plane);
 	complete(&inst->completion);
 
 	return ret;

@@ -52,10 +52,12 @@ enum pipe_type {
 
 extern const struct iris_firmware_data iris_hfi_gen1_data;
 extern const struct iris_firmware_data iris_hfi_gen2_data;
+extern const struct iris_firmware_data iris_hfi_gen2_vpu2_data;
 
 extern const struct iris_platform_data qcs8300_data;
 extern const struct iris_platform_data sc7280_data;
 extern const struct iris_platform_data sm8250_data;
+extern const struct iris_platform_data sm8450_data;
 extern const struct iris_platform_data sm8550_data;
 extern const struct iris_platform_data sm8650_data;
 extern const struct iris_platform_data sm8750_data;
@@ -127,6 +129,7 @@ enum platform_inst_fw_cap_type {
 	TIER,
 	HEADER_MODE,
 	PREPEND_SPSPPS_TO_IDR,
+	REQUEST_I_FRAME,
 	BITRATE,
 	BITRATE_PEAK,
 	BITRATE_MODE,
@@ -318,6 +321,8 @@ struct iris_platform_data {
 	u32 tz_cp_config_data_size;
 	u32 num_vpp_pipe;
 	bool no_aon;
+	bool no_tz_fifo_reset;
+	bool no_opb;
 	u32 max_session_count;
 	/* max number of macroblocks per frame supported */
 	u32 max_core_mbpf;

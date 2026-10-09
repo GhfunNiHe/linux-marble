@@ -3,6 +3,8 @@
  * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
+#include <linux/moduleparam.h>
+
 #include "iris_instance.h"
 #include "iris_vpu_buffer.h"
 #include "iris_hfi_gen1_defines.h"
@@ -1477,11 +1479,14 @@ static u32 iris_vpu_enc_arp_size(struct iris_inst *inst)
 
 inline bool is_scaling_enabled(struct iris_inst *inst)
 {
-	struct v4l2_pix_format_mplane *dst_fmt = &inst->fmt_dst->fmt.pix_mp;
-	struct v4l2_pix_format_mplane *src_fmt = &inst->fmt_src->fmt.pix_mp;
-
-	return dst_fmt->width != src_fmt->width ||
-		dst_fmt->height != src_fmt->height;
+	/*
+	 * Compare the visible sizes: the queue formats are aligned differently
+	 * (raw input to 128x32, bitstream to the codec block size), so e.g. a
+	 * 2400 wide frame looked like a 2432 -> 2400 downscale and the firmware
+	 * rejected HFI_CMD_START once the VPSS buffer was queued.
+	 */
+	return inst->crop.width != inst->enc_scale_width ||
+		inst->crop.height != inst->enc_scale_height;
 }
 
 static inline
@@ -2072,6 +2077,46 @@ static int output_min_count(struct iris_inst *inst)
 	return output_min_count;
 }
 
+static u32 iris_vpu_enc_dpb_size(struct iris_inst *inst)
+{
+	struct v4l2_pix_format_mplane *fmt = &inst->fmt_src->fmt.pix_mp;
+	u32 width = fmt->width;
+	u32 height = fmt->height;
+	bool is_ten_bit = false;
+	u32 u_buffer_width, u_buffer_height, u_chroma_buffer_height;
+	u32 ref_buf_size, metadata_stride, metadata_buf_height, meta_size_y, meta_size_c;
+
+	if (fmt->pixelformat == V4L2_PIX_FMT_P010)
+		is_ten_bit = true;
+
+	if (!is_ten_bit) {
+		u_buffer_width = ALIGN(width, 128);
+		u_buffer_height = ALIGN(height, 32);
+		u_chroma_buffer_height = ALIGN(height >> 1, 32);
+		ref_buf_size = (u_buffer_height + u_chroma_buffer_height) * u_buffer_width;
+
+		metadata_stride = ALIGN((width + 31) / 32, 64);
+		metadata_buf_height = ALIGN((height + 7) / 8, 16);
+		meta_size_y = ALIGN(metadata_stride * metadata_buf_height, 4096);
+		meta_size_c = ALIGN(metadata_stride * metadata_buf_height, 4096);
+
+		return ref_buf_size + meta_size_y + meta_size_c;
+	} else {
+		u32 ref_buf_height = ALIGN(height, 32);
+		u32 ref_luma_stride = ALIGN(((width + 191) / 192) * 192, 128);
+		u32 luma_size = ALIGN(ref_buf_height * ref_luma_stride, 4096);
+		u32 chroma_size = ALIGN(ref_luma_stride * ALIGN((height + 1) >> 1, 32), 4096);
+		ref_buf_size = luma_size + chroma_size;
+
+		metadata_stride = ALIGN((width + 31) / 32, 64);
+		metadata_buf_height = ALIGN((height + 7) / 8, 16);
+		meta_size_y = ALIGN(metadata_stride * metadata_buf_height, 4096);
+		meta_size_c = ALIGN(metadata_stride * metadata_buf_height, 4096);
+
+		return ref_buf_size + meta_size_y + meta_size_c;
+	}
+}
+
 struct iris_vpu_buf_type_handle {
 	enum iris_buffer_type type;
 	u32 (*handle)(struct iris_inst *inst);
@@ -2102,6 +2147,7 @@ u32 iris_vpu_buf_size(struct iris_inst *inst, enum iris_buffer_type buffer_type)
 		{BUF_VPSS,        iris_vpu_enc_vpss_size            },
 		{BUF_SCRATCH_1,   iris_vpu_enc_scratch1_size        },
 		{BUF_SCRATCH_2,   iris_vpu_enc_scratch2_size        },
+		{BUF_DPB,         iris_vpu_enc_dpb_size             },
 	};
 
 	if (inst->domain == DECODER) {
@@ -2210,8 +2256,15 @@ static u32 internal_buffer_count(struct iris_inst *inst,
 	return 0;
 }
 
+static bool enc_dpb = true;
+module_param(enc_dpb, bool, 0644);
+MODULE_PARM_DESC(enc_dpb, "allocate encoder DPB (reconstruction) buffers, required by VPU2");
+
 static inline int iris_vpu_dpb_count(struct iris_inst *inst)
 {
+	if (inst->domain == ENCODER)
+		return enc_dpb ? 2 : 0;	/* stock VPU2: 2 recon buffers */
+
 	if (inst->codec == V4L2_PIX_FMT_AV1)
 		return 11;
 

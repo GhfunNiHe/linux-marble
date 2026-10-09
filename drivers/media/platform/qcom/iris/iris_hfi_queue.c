@@ -3,11 +3,28 @@
  * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
+#include <linux/moduleparam.h>
 #include <linux/pm_runtime.h>
 
 #include "iris_core.h"
 #include "iris_hfi_queue.h"
 #include "iris_vpu_common.h"
+
+static bool hfi_dump;
+module_param(hfi_dump, bool, 0644);
+MODULE_PARM_DESC(hfi_dump, "hex-dump HFI command and message packets");
+
+static void iris_hfi_dump(struct iris_core *core, const char *dir, void *pkt, u32 size)
+{
+	char prefix[32];
+
+	if (!hfi_dump)
+		return;
+
+	snprintf(prefix, sizeof(prefix), "iris %s: ", dir);
+	print_hex_dump(KERN_INFO, prefix, DUMP_PREFIX_OFFSET, 16, 4, pkt,
+		       min_t(u32, size, 512), false);
+}
 
 static int iris_hfi_queue_write(struct iris_iface_q_info *qinfo, void *packet, u32 packet_size)
 {
@@ -116,6 +133,8 @@ int iris_hfi_queue_cmd_write_locked(struct iris_core *core, void *pkt, u32 pkt_s
 	if (core->state == IRIS_CORE_ERROR || core->state == IRIS_CORE_DEINIT)
 		return -EINVAL;
 
+	iris_hfi_dump(core, "cmd", pkt, pkt_size);
+
 	if (!iris_hfi_queue_write(q_info, pkt, pkt_size)) {
 		iris_vpu_raise_interrupt(core);
 	} else {
@@ -167,6 +186,8 @@ int iris_hfi_queue_msg_read(struct iris_core *core, void *pkt)
 		ret = -ENODATA;
 		goto unlock;
 	}
+
+	iris_hfi_dump(core, "msg", pkt, *(u32 *)pkt);
 
 unlock:
 	mutex_unlock(&core->lock);

@@ -293,10 +293,16 @@ static int iris_venc_s_fmt_input(struct iris_inst *inst, struct v4l2_format *f)
 
 	if (f->fmt.pix_mp.width != inst->crop.width ||
 	    f->fmt.pix_mp.height != inst->crop.height) {
+		/*
+		 * Default crop is the visible frame, not the 128/32-aligned
+		 * buffer: the input crop offsets are enc_raw_* - crop.*, so an
+		 * aligned crop underflows for widths that are not a multiple of
+		 * 128 and the firmware rejects HFI_CMD_START.
+		 */
 		inst->crop.top = 0;
 		inst->crop.left = 0;
-		inst->crop.width = fmt->fmt.pix_mp.width;
-		inst->crop.height = fmt->fmt.pix_mp.height;
+		inst->crop.width = f->fmt.pix_mp.width;
+		inst->crop.height = f->fmt.pix_mp.height;
 
 		iris_venc_s_fmt_output(inst, output_fmt);
 	}
@@ -490,6 +496,54 @@ int iris_venc_streamon_input(struct iris_inst *inst)
 	return iris_process_streamon_input(inst);
 }
 
+/*
+ * Properties the stock msm_vidc driver sends for a VPU2 (SM8450/SM8475) H.264
+ * encode session that the VPU3 oriented capability tables here do not cover.
+ * Values captured from Android (c2.qti.avc.encoder, 1280x720).
+ */
+static const struct {
+	u32 id, port, type, value;
+} iris_venc_vpu2_props[] = {
+	{ 0x03000157, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32, 0 },		/* CSC */
+	{ 0x0300014b, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32, 0 },		/* ROTATION */
+	{ 0x0300017b, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32_ENUM, 0 },	/* NAL_LENGTH_FIELD */
+	{ 0x03000142, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32, 0 },		/* BASELAYER_PRIORITYID */
+	{ 0x03000151, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32, 0 },		/* AUD */
+	{ 0x03000129, HFI_PORT_BITSTREAM, HFI_PAYLOAD_32_PACKED, 0x60600 },	/* DEBLOCKING_MODE */
+	{ 0x0300010b, HFI_PORT_NONE,      HFI_PAYLOAD_U32, 4 },		/* PIPE */
+	{ 0x03000106, HFI_PORT_NONE,      HFI_PAYLOAD_U32, 0 },		/* SESSION_PRIORITY */
+	{ 0x03000134, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32, 0 },		/* LTR_COUNT */
+	{ 0x0300012b, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32, 1 },		/* TIME_DELTA_BASED_RC */
+	{ 0x03000138, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32_ENUM, 1 },	/* LAYER_ENCODING_TYPE */
+	{ 0x03000139, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32, 1 },		/* LAYER_COUNT */
+	{ 0x0300017d, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32, 0 },		/* MAINTAIN_MIN_QUALITY */
+	{ 0x0300012d, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32, 0x19 },	/* BITRATE_BOOST */
+	{ 0x0300012c, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32, 1 },		/* CONTENT_ADAPTIVE_CODING */
+	{ 0x0300014e, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32_ENUM, 2 },	/* BLUR_TYPES */
+	{ 0x03000148, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32_ENUM, 1 },	/* QUALITY_MODE */
+	{ 0x03000194, HFI_PORT_BITSTREAM, HFI_PAYLOAD_U32, 1 },		/* DISABLE_VUI_TIMING_INFO */
+};
+
+static int iris_venc_set_vpu2_props(struct iris_inst *inst)
+{
+	const struct iris_hfi_session_ops *hfi_ops = inst->hfi_session_ops;
+	u32 i, val;
+	int ret;
+
+	for (i = 0; i < ARRAY_SIZE(iris_venc_vpu2_props); i++) {
+		val = iris_venc_vpu2_props[i].value;
+		ret = hfi_ops->session_set_property(inst, iris_venc_vpu2_props[i].id,
+						   HFI_HOST_FLAGS_NONE,
+						   iris_venc_vpu2_props[i].port,
+						   iris_venc_vpu2_props[i].type,
+						   &val, sizeof(val));
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 int iris_venc_streamon_output(struct iris_inst *inst)
 {
 	int ret;
@@ -497,6 +551,12 @@ int iris_venc_streamon_output(struct iris_inst *inst)
 	ret = iris_set_properties(inst, V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
 	if (ret)
 		goto error;
+
+	if (inst->core->iris_platform_data->no_opb) {
+		ret = iris_venc_set_vpu2_props(inst);
+		if (ret)
+			goto error;
+	}
 
 	ret = iris_alloc_and_queue_persist_bufs(inst, BUF_ARP);
 	if (ret)

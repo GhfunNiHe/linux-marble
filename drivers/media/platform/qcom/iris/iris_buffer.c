@@ -543,6 +543,24 @@ static int iris_create_internal_buffer(struct iris_inst *inst,
 	buffer->type = buffer_type;
 	buffer->index = index;
 	buffer->buffer_size = buffers->size;
+
+	if (buffer_type == BUF_ARP && core->arp.required &&
+	    !iris_arp_pool_enabled(core)) {
+		dev_err(core->dev, "ARP pool unavailable, refusing encoder session\n");
+		kfree(buffer);
+		return -ENODEV;
+	}
+
+	if (buffer_type == BUF_ARP && iris_arp_pool_enabled(core)) {
+		int ret = iris_arp_alloc(inst, buffer);
+
+		if (ret) {
+			kfree(buffer);
+			return ret;
+		}
+		goto out;
+	}
+
 	buffer->dma_attrs = DMA_ATTR_WRITE_COMBINE | DMA_ATTR_NO_KERNEL_MAPPING;
 
 	buffer->kvaddr = dma_alloc_attrs(core->dev, buffer->buffer_size,
@@ -551,6 +569,8 @@ static int iris_create_internal_buffer(struct iris_inst *inst,
 		kfree(buffer);
 		return -ENOMEM;
 	}
+
+out:
 
 	list_add_tail(&buffer->list, &buffers->list);
 
@@ -667,7 +687,8 @@ int iris_queue_internal_buffers(struct iris_inst *inst, u32 plane)
 				continue;
 			if (buffer->attr & BUF_ATTR_QUEUED)
 				continue;
-			if (buffer->type == BUF_DPB && inst->state != IRIS_INST_STREAMING) {
+			if (buffer->type == BUF_DPB && inst->domain == DECODER &&
+			    inst->state != IRIS_INST_STREAMING) {
 				buffer->attr |= BUF_ATTR_DEFERRED;
 				continue;
 			}
@@ -685,8 +706,11 @@ int iris_destroy_internal_buffer(struct iris_inst *inst, struct iris_buffer *buf
 	struct iris_core *core = inst->core;
 
 	list_del(&buffer->list);
-	dma_free_attrs(core->dev, buffer->buffer_size, buffer->kvaddr,
-		       buffer->device_addr, buffer->dma_attrs);
+	if (buffer->type == BUF_ARP && iris_arp_pool_enabled(core))
+		iris_arp_free(inst, buffer);
+	else
+		dma_free_attrs(core->dev, buffer->buffer_size, buffer->kvaddr,
+			       buffer->device_addr, buffer->dma_attrs);
 	kfree(buffer);
 
 	return 0;

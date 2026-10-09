@@ -201,6 +201,7 @@ static void iris_remove(struct platform_device *pdev)
 		return;
 
 	iris_core_deinit(core);
+	iris_arp_pool_deinit(core);
 
 	video_unregister_device(core->vdev_dec);
 	video_unregister_device(core->vdev_enc);
@@ -296,14 +297,20 @@ static int iris_probe(struct platform_device *pdev)
 	dma_set_max_seg_size(&pdev->dev, DMA_BIT_MASK(32));
 	dma_set_seg_boundary(&pdev->dev, DMA_BIT_MASK(32));
 
+	ret = iris_arp_pool_init(core);
+	if (ret)
+		dev_err(dev, "encoder ARP pool init failed: %d, encoder disabled\n", ret);
+
 	pm_runtime_set_autosuspend_delay(core->dev, AUTOSUSPEND_DELAY_VALUE);
 	pm_runtime_use_autosuspend(core->dev);
 	ret = devm_pm_runtime_enable(core->dev);
 	if (ret)
-		goto err_vdev_unreg_enc;
+		goto err_arp_deinit;
 
 	return 0;
 
+err_arp_deinit:
+	iris_arp_pool_deinit(core);
 err_vdev_unreg_enc:
 	video_unregister_device(core->vdev_enc);
 err_vdev_unreg_dec:
@@ -371,6 +378,10 @@ static const struct of_device_id iris_dt_match[] = {
 	{
 		.compatible = "qcom,sm8250-venus",
 		.data = &sm8250_data,
+	},
+	{
+		.compatible = "qcom,sm8450-iris",
+		.data = &sm8450_data,
 	},
 	{
 		.compatible = "qcom,sm8550-iris",

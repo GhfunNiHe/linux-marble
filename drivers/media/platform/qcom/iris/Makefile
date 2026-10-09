@@ -1,4 +1,5 @@
-qcom-iris-objs += iris_buffer.o \
+qcom-iris-objs += iris_arp.o \
+             iris_buffer.o \
              iris_common.o \
              iris_core.o \
              iris_ctrls.o \

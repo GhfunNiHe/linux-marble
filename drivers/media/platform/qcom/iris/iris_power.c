@@ -70,6 +70,15 @@ static int iris_vote_interconnects(struct iris_inst *inst)
 	vote_data->height = inp_f->fmt.pix_mp.height;
 	vote_data->fps = DEFAULT_FPS;
 
+	/*
+	 * The table is the decoder's. An encoder reads the source and its
+	 * references and writes reconstructions, so weight it twice, at the
+	 * frame rate the client asked for (low-latency streaming at 60-120 fps
+	 * otherwise starved the VPU at the 30 fps 1080p vote).
+	 */
+	if (inst->domain == ENCODER)
+		vote_data->fps = 2 * max_t(u32, inst->frame_rate, DEFAULT_FPS);
+
 	inst->power.icc_bw = iris_calc_bw(inst, vote_data);
 
 	return iris_set_interconnects(inst);

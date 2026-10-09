@@ -4,6 +4,7 @@
  */
 
 #include <linux/iopoll.h>
+#include <linux/moduleparam.h>
 #include <linux/pm_opp.h>
 #include <linux/reset.h>
 
@@ -205,11 +206,13 @@ int iris_vpu_power_off_controller(struct iris_core *core)
 	if (ret)
 		goto disable_power;
 
-	writel(CTL_AXI_CLK_HALT | CTL_CLK_HALT,
-	       core->reg_base + WRAPPER_TZ_CTL_AXI_CLOCK_CONFIG);
-	writel(RESET_HIGH, core->reg_base + WRAPPER_TZ_QNS4PDXFIFO_RESET);
-	writel(0x0, core->reg_base + WRAPPER_TZ_QNS4PDXFIFO_RESET);
-	writel(0x0, core->reg_base + WRAPPER_TZ_CTL_AXI_CLOCK_CONFIG);
+	if (!core->iris_platform_data->no_tz_fifo_reset) {
+		writel(CTL_AXI_CLK_HALT | CTL_CLK_HALT,
+		       core->reg_base + WRAPPER_TZ_CTL_AXI_CLOCK_CONFIG);
+		writel(RESET_HIGH, core->reg_base + WRAPPER_TZ_QNS4PDXFIFO_RESET);
+		writel(0x0, core->reg_base + WRAPPER_TZ_QNS4PDXFIFO_RESET);
+		writel(0x0, core->reg_base + WRAPPER_TZ_CTL_AXI_CLOCK_CONFIG);
+	}
 
 disable_power:
 	iris_disable_unprepare_clock(core, IRIS_AHB_CLK);
@@ -314,8 +317,15 @@ int iris_vpu_set_hwmode(struct iris_core *core)
 	return dev_pm_genpd_set_hwmode(core->pmdomain_tbl->pd_devs[IRIS_HW_POWER_DOMAIN], true);
 }
 
+static bool no_hwmode;
+module_param(no_hwmode, bool, 0644);
+MODULE_PARM_DESC(no_hwmode, "debug: keep the vcodec GDSC under software control");
+
 int iris_vpu_switch_to_hwmode(struct iris_core *core)
 {
+	if (no_hwmode)
+		return 0;
+
 	return core->iris_platform_data->vpu_ops->set_hwmode(core);
 }
 

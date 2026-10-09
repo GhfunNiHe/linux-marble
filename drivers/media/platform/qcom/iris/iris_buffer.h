@@ -8,6 +8,7 @@
 
 #include <media/videobuf2-v4l2.h>
 
+struct iris_core;
 struct iris_inst;
 
 #define to_iris_buffer(ptr)	container_of(ptr, struct iris_buffer, vb2)
@@ -121,5 +122,9 @@ int iris_queue_buffer(struct iris_inst *inst, struct iris_buffer *buf);
 int iris_queue_deferred_buffers(struct iris_inst *inst, enum iris_buffer_type buf_type);
 int iris_vb2_buffer_done(struct iris_inst *inst, struct iris_buffer *buf);
 void iris_vb2_queue_error(struct iris_inst *inst);
+
+bool iris_arp_pool_enabled(struct iris_core *core);
+int iris_arp_alloc(struct iris_inst *inst, struct iris_buffer *buffer);
+void iris_arp_free(struct iris_inst *inst, struct iris_buffer *buffer);
 
 #endif

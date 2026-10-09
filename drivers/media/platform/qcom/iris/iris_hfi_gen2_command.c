@@ -141,6 +141,7 @@ static u32 iris_hfi_gen2_get_port_from_buf_type(struct iris_inst *inst,
 		case BUF_NON_COMV:
 		case BUF_LINE:
 		case BUF_SCRATCH_2:
+		case BUF_DPB:
 			return HFI_PORT_BITSTREAM;
 		case BUF_ARP:
 		default:
@@ -154,6 +155,7 @@ static int iris_hfi_gen2_session_set_property(struct iris_inst *inst, u32 packet
 					      u32 payload_size)
 {
 	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+
 
 	iris_hfi_gen2_packet_session_property(inst,
 					      packet_type,
@@ -1059,8 +1061,24 @@ static int iris_hfi_gen2_subscribe_property(struct iris_inst *inst, u32 plane)
 
 	payload[0] = HFI_MODE_PROPERTY;
 
-	if (inst->domain == ENCODER)
-		return 0;
+	if (inst->domain == ENCODER) {
+		/*
+		 * Like the downstream driver, ask for the picture type of every
+		 * bitstream buffer; without it the first IDR is not flagged as a
+		 * keyframe.
+		 */
+		if (V4L2_TYPE_IS_OUTPUT(plane))
+			return 0;
+
+		payload[1] = HFI_PROP_PICTURE_TYPE;
+
+		return iris_hfi_gen2_session_subscribe_mode(inst,
+							    HFI_CMD_SUBSCRIBE_MODE,
+							    plane,
+							    HFI_PAYLOAD_U32_ARRAY,
+							    &payload[0],
+							    2 * sizeof(u32));
+	}
 
 	if (V4L2_TYPE_IS_OUTPUT(plane)) {
 		subscribe_prop_size = core->iris_firmware_data->dec_input_prop_size;
@@ -1179,6 +1197,8 @@ static int iris_hfi_gen2_session_resume_drc(struct iris_inst *inst, u32 plane)
 {
 	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
 	u32 payload = HFI_CMD_SETTINGS_CHANGE;
+	/* VPU2 firmware only accepts a bare RESUME after a settings change */
+	bool bare = inst->core->iris_platform_data->no_opb;
 
 	iris_hfi_gen2_packet_session_command(inst,
 					     HFI_CMD_RESUME,
@@ -1186,9 +1206,9 @@ static int iris_hfi_gen2_session_resume_drc(struct iris_inst *inst, u32 plane)
 					     HFI_HOST_FLAGS_INTR_REQUIRED),
 					     iris_hfi_gen2_get_port(inst, plane),
 					     inst->session_id,
-					     HFI_PAYLOAD_U32,
-					     &payload,
-					     sizeof(u32));
+					     bare ? HFI_PAYLOAD_NONE : HFI_PAYLOAD_U32,
+					     bare ? NULL : &payload,
+					     bare ? 0 : sizeof(u32));
 
 	return iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
 					inst_hfi_gen2->packet->size);
@@ -1288,7 +1308,7 @@ static int iris_hfi_gen2_set_num_comv(struct iris_inst *inst)
 }
 
 static void iris_hfi_gen2_get_buffer(u32 domain, struct iris_buffer *buffer,
-				     struct iris_hfi_buffer *buf)
+				     struct iris_hfi_buffer *buf, bool cb_flag)
 {
 	memset(buf, 0, sizeof(*buf));
 	buf->type = iris_hfi_gen2_buf_type_from_driver(domain, buffer->type);
@@ -1303,7 +1323,9 @@ static void iris_hfi_gen2_get_buffer(u32 domain, struct iris_buffer *buffer,
 	buf->data_size = buffer->data_size;
 	if (buffer->attr & BUF_ATTR_PENDING_RELEASE)
 		buf->flags |= HFI_BUF_HOST_FLAG_RELEASE;
-	buf->flags |= HFI_BUF_HOST_FLAGS_CB_NON_SECURE;
+	/* VPU2 firmware (stock msm_vidc) passes no context bank flags */
+	if (cb_flag)
+		buf->flags |= HFI_BUF_HOST_FLAGS_CB_NON_SECURE;
 	buf->timestamp = buffer->timestamp;
 }
 
@@ -1314,7 +1336,7 @@ static int iris_hfi_gen2_session_queue_buffer(struct iris_inst *inst, struct iri
 	u32 port;
 	int ret;
 
-	iris_hfi_gen2_get_buffer(inst->domain, buffer, &hfi_buffer);
+	iris_hfi_gen2_get_buffer(inst->domain, buffer, &hfi_buffer, !inst->core->iris_platform_data->no_opb);
 	if (buffer->type == BUF_COMV) {
 		ret = iris_hfi_gen2_set_num_comv(inst);
 		if (ret)
@@ -1341,7 +1363,7 @@ static int iris_hfi_gen2_session_release_buffer(struct iris_inst *inst, struct i
 	struct iris_hfi_buffer hfi_buffer;
 	u32 port;
 
-	iris_hfi_gen2_get_buffer(inst->domain, buffer, &hfi_buffer);
+	iris_hfi_gen2_get_buffer(inst->domain, buffer, &hfi_buffer, !inst->core->iris_platform_data->no_opb);
 	hfi_buffer.flags |= HFI_BUF_HOST_FLAG_RELEASE;
 	port = iris_hfi_gen2_get_port_from_buf_type(inst, buffer->type);
 
