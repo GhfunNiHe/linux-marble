@@ -134,8 +134,12 @@ static void drm_mode_to_intf_timing_params(
 		 * TODO: replace drm_dsc_get_bpp_int with logic to handle
 		 * fractional part if there is fraction
 		 */
-		timing->width = timing->width * drm_dsc_get_bpp_int(dsc) /
-				(dsc->bits_per_component * 3);
+		/*
+		 * The DPU->DSI interface carries 24 bits per pclk regardless of
+		 * the panel's bpc, so the compressed line is bpp*width/24 pclks.
+		 * (bpc*3 only equals 24 for 8bpc; 10bpc panels underflow.)
+		 */
+		timing->width = timing->width * drm_dsc_get_bpp_int(dsc) / 24;
 		timing->xres = timing->width;
 		timing->dce_bytes_per_line = msm_dsc_get_bytes_per_line(dsc);
 	}
