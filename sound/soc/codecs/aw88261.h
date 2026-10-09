@@ -517,7 +517,9 @@
 #define AW88261_VCAL_FACTOR		(1<<13)
 
 #define AW88261_START_RETRIES		(5)
-#define AW88261_START_WORK_DELAY_MS	(0)
+#define AW88261_START_WORK_DELAY_MS	(30)
+#define AW88261_START_WORK_RETRY_MS	(50)
+#define AW88261_START_WORK_MAX		(20)
 
 /* NOTE: 192000 has a reg value donwstream but not listed in datasheet */
 #define AW88261_RATES (SNDRV_PCM_RATE_8000_48000 | \
@@ -553,12 +555,45 @@
 
 enum aw88261_id {
 	AW88261_CHIP_ID = 0x2113,
+	AW88263S_CHIP_ID = 0x2032,
 };
+
+/* AW88263S specific controls (chip id 0x2032) */
+#define AW_PID_2032_HMUTE_START_BIT		(4)
+#define AW_PID_2032_HMUTE_BITS_LEN		(1)
+#define AW_PID_2032_HMUTE_MASK \
+	(~(((1<<AW_PID_2032_HMUTE_BITS_LEN)-1) << AW_PID_2032_HMUTE_START_BIT))
+#define AW_PID_2032_HMUTE_DISABLE_VALUE \
+	(0 << AW_PID_2032_HMUTE_START_BIT)
+#define AW_PID_2032_HMUTE_ENABLE_VALUE \
+	(1 << AW_PID_2032_HMUTE_START_BIT)
+
+#define AW_PID_2032_I2SCFG1_REG			(0x07)
+#define AW_PID_2032_I2STXEN_START_BIT		(0)
+#define AW_PID_2032_I2STXEN_BITS_LEN		(1)
+#define AW_PID_2032_I2STXEN_MASK \
+	(~(((1<<AW_PID_2032_I2STXEN_BITS_LEN)-1) << AW_PID_2032_I2STXEN_START_BIT))
+#define AW_PID_2032_I2STXEN_DISABLE_VALUE \
+	(0 << AW_PID_2032_I2STXEN_START_BIT)
+#define AW_PID_2032_I2STXEN_ENABLE_VALUE \
+	(1 << AW_PID_2032_I2STXEN_START_BIT)
+
+#define AW_PID_2032_VOL_START_BIT		(6)
+#define AW_PID_2032_VOL_BITS_LEN		(10)
+#define AW_PID_2032_VOL_MASK \
+	(~(((1<<AW_PID_2032_VOL_BITS_LEN)-1) << AW_PID_2032_VOL_START_BIT))
+
+#define AW_PID_2032_EFRH_REG			(0x78)
+#define AW_PID_2032_EFRM1_REG			(0x7A)
+#define AW_PID_2032_VTMCTRL3_REG		(0x56)
+#define AW_PID_2032_VCAL_FACTOR			(1 << 13)
+#define AW_PID_2032_CABL_BASE_VALUE		(1000)
 
 enum {
 	AW88261_500_US = 500,
 	AW88261_1000_US = 1000,
 	AW88261_2000_US = 2000,
+	AW88261_5000_US = 5000,
 };
 
 enum {
@@ -582,8 +617,12 @@ enum {
 };
 
 struct aw88261 {
+	bool keep_fw_i2s;
 	struct aw_device *aw_pa;
 	struct mutex lock;
+	struct delayed_work start_work;
+	bool playback_active;
+	unsigned int start_attempts;
 	struct gpio_desc *reset_gpio;
 	struct regmap *regmap;
 	struct aw_container *aw_cfg;
