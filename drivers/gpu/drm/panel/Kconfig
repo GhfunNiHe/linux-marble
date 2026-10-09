@@ -1339,6 +1339,17 @@ config DRM_PANEL_WIDECHIPS_WS2401
 	  480x800 display controller used in panels such as Samsung LMS380KF01.
 	  This display is used in the Samsung Galaxy Ace 2 GT-I8160 (Codina).
 
+config DRM_PANEL_XIAOMI_M16T_36_02_0A
+	tristate "Xiaomi marble M16T 36 02 0a DSC video mode panel"
+	depends on OF
+	depends on DRM_MIPI_DSI
+	depends on BACKLIGHT_CLASS_DEVICE
+	select DRM_DISPLAY_DSC_HELPER
+	select DRM_DISPLAY_HELPER
+	help
+	  Say Y here to enable support for the 1080x2400 120Hz DSC panel
+	  used in the Xiaomi Poco F5 / Redmi Note 12 Turbo (marble).
+
 config DRM_PANEL_XINPENG_XPP055C272
 	tristate "Xinpeng XPP055C272 panel driver"
 	depends on OF
