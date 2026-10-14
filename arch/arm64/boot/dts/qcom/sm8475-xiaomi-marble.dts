@@ -1153,14 +1153,6 @@
 		line-name = "speaker-bottom-reset-n";
 	};
 
-	/* Routes the top amp to the top speaker (high: earpiece) */
-	speaker-earpiece-switch-hog {
-		gpio-hog;
-		gpios = <52 GPIO_ACTIVE_HIGH>;
-		output-low;
-		line-name = "speaker-earpiece-switch";
-	};
-
 	tert_mi2s_active: tert-mi2s-active-state {
 		sck-pins {
 			pins = "gpio121";
@@ -1195,6 +1187,7 @@
 &sound {
 	compatible = "qcom,sm8450-sndcard";
 	model = "SM8475-Xiaomi-Marble";
+	speaker-earpiece-gpios = <&tlmm 52 GPIO_ACTIVE_HIGH>;
 
 	pinctrl-0 = <&tert_mi2s_active>;
 	pinctrl-names = "default";
