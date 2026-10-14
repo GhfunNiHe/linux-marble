@@ -626,6 +626,7 @@ struct aw88261 {
 	struct gpio_desc *reset_gpio;
 	struct regmap *regmap;
 	struct aw_container *aw_cfg;
+	struct aw88261_profile_volume *profile_volumes;
 
 	int efuse_check;
 	int frcset_en;
