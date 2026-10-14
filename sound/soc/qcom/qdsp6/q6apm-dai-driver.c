@@ -16,6 +16,8 @@
 #include <linux/dma-mapping.h>
 #include <sound/pcm_params.h>
 #include "q6apm.h"
+#include "q6apm-voice.h"
+#include "q6apm-voice-backend.h"
 
 #define DRV_NAME "q6apm-dai"
 #define POS_BUFFER_BYTES	4096
@@ -97,6 +99,7 @@ struct q6apm_dai_rtd {
 
 struct q6apm_dai_data {
 	long long sid;
+	struct q6apm_voice *voice;
 	struct mutex dma_lock; /* Serialize fixed PCM buffer ownership and quarantine. */
 	struct list_head pcm_buffers;
 };
@@ -117,6 +120,26 @@ static void q6apm_dai_retain_dma(struct device *dev,
 		list_add_tail(&buffer->node, &q6apm_retained_dma);
 	dev_err(dev, "DSP DMA ownership unresolved; retaining %zu bytes until reboot\n",
 		buffer->dma.bytes);
+}
+
+static const struct snd_pcm_hardware q6apm_voice_hardware = {
+	.info = SNDRV_PCM_INFO_INTERLEAVED,
+	.formats = SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S32_LE,
+	.rates = SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_96000,
+	.rate_min = 48000,
+	.rate_max = 96000,
+	.channels_min = 2,
+	.channels_max = 2,
+	.buffer_bytes_max = 4096,
+	.period_bytes_min = 1024,
+	.period_bytes_max = 2048,
+	.periods_min = 2,
+	.periods_max = 2,
+};
+
+static bool q6apm_dai_voice(struct snd_pcm_substream *substream)
+{
+	return q6apm_voice_backend_link(snd_soc_substream_to_rtd(substream));
 }
 
 static const struct snd_pcm_hardware q6apm_dai_hardware_capture = {
@@ -253,6 +276,9 @@ static int q6apm_dai_prepare(struct snd_soc_component *component,
 	struct q6apm_dai_data *pdata;
 	int ret;
 
+	if (q6apm_dai_voice(substream))
+		return 0;
+
 	pdata = snd_soc_component_get_drvdata(component);
 	if (!pdata)
 		return -EINVAL;
@@ -351,6 +377,9 @@ static int q6apm_dai_ack(struct snd_soc_component *component, struct snd_pcm_sub
 	struct q6apm_dai_rtd *prtd = runtime->private_data;
 	int i, ret = 0, avail_periods;
 
+	if (q6apm_dai_voice(substream))
+		return 0;
+
 	if (q6apm_is_graph_in_push_pull_mode(prtd->graph))
 		return 0;
 
@@ -375,6 +404,9 @@ static int q6apm_dai_trigger(struct snd_soc_component *component,
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct q6apm_dai_rtd *prtd = runtime->private_data;
 	int ret = 0;
+
+	if (q6apm_dai_voice(substream))
+		return 0;
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
@@ -416,6 +448,14 @@ static int q6apm_dai_open(struct snd_soc_component *component,
 		dev_err(dev, "Drv data not found ..\n");
 		return -EINVAL;
 	}
+	if (q6apm_dai_voice(substream)) {
+		if (!q6apm_voice_backend_allowed(pdata->voice))
+			return -EBUSY;
+		runtime->hw = q6apm_voice_hardware;
+		return 0;
+	}
+	if (!q6apm_voice_pcm_allowed(pdata->voice))
+		return -EBUSY;
 
 	prtd = kzalloc_obj(*prtd);
 	if (prtd == NULL)
@@ -494,6 +534,9 @@ static int q6apm_dai_close(struct snd_soc_component *component,
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct q6apm_dai_rtd *prtd = runtime->private_data;
 
+	if (q6apm_dai_voice(substream))
+		return 0;
+
 	if (prtd->state) {
 		/* only stop graph that is started */
 		q6apm_graph_stop(prtd->graph);
@@ -513,6 +556,9 @@ static snd_pcm_uframes_t q6apm_dai_pointer(struct snd_soc_component *component,
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct q6apm_dai_rtd *prtd = runtime->private_data;
 	snd_pcm_uframes_t ptr;
+
+	if (q6apm_dai_voice(substream))
+		return 0;
 
 	if (q6apm_is_graph_in_push_pull_mode(prtd->graph)) {
 		int retries = 10;
@@ -546,6 +592,9 @@ static int q6apm_dai_hw_params(struct snd_soc_component *component,
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct q6apm_dai_rtd *prtd = runtime->private_data;
+
+	if (q6apm_dai_voice(substream))
+		return 0;
 
 	prtd->pcm_size = params_buffer_bytes(params);
 	prtd->periods = params_periods(params);
@@ -636,6 +685,9 @@ static int q6apm_dai_pcm_new(struct snd_soc_component *component, struct snd_soc
 	bool is_push_pull;
 	struct snd_pcm_substream *substream = NULL;
 
+	if (q6apm_voice_backend_link(rtd))
+		return 0;
+
 	graph_id = cpu_dai->driver->id;
 
 	/* Note: DSP backend dais are uni-directional ONLY(either playback or capture) */
@@ -712,6 +764,9 @@ static void q6apm_dai_pcm_free(struct snd_soc_component *component, struct snd_p
 {
 	struct snd_pcm_substream *substream;
 
+	if (q6apm_voice_backend_link(pcm->private_data))
+		return;
+
 	substream = pcm->streams[SNDRV_PCM_STREAM_CAPTURE].substream;
 	if (substream)
 		q6apm_dai_memory_unmap(component, substream);
@@ -737,6 +792,8 @@ static int q6apm_dai_compr_open(struct snd_soc_component *component,
 	pdata = snd_soc_component_get_drvdata(component);
 	if (!pdata)
 		return -EINVAL;
+	if (!q6apm_voice_pcm_allowed(pdata->voice))
+		return -EBUSY;
 
 	prtd = kzalloc_obj(*prtd);
 	if (prtd == NULL)
@@ -1105,8 +1162,33 @@ static const struct snd_compress_ops q6apm_dai_compress_ops = {
 	.copy		= q6apm_compr_copy,
 };
 
+static int q6apm_dai_component_probe(struct snd_soc_component *component)
+{
+	struct q6apm_dai_data *pdata = snd_soc_component_get_drvdata(component);
+	int ret;
+
+	pdata->voice = q6apm_voice_create(component);
+	if (IS_ERR_OR_NULL(pdata->voice))
+		return PTR_ERR_OR_ZERO(pdata->voice);
+	ret = q6apm_voice_pcm_create(component);
+	if (ret) {
+		q6apm_voice_free(pdata->voice);
+		pdata->voice = NULL;
+	}
+	return ret;
+}
+
+static void q6apm_dai_component_remove(struct snd_soc_component *component)
+{
+	struct q6apm_dai_data *pdata = snd_soc_component_get_drvdata(component);
+
+	q6apm_voice_free(pdata->voice);
+}
+
 static const struct snd_soc_component_driver q6apm_fe_dai_component = {
 	.name		= DRV_NAME,
+	.probe		= q6apm_dai_component_probe,
+	.remove		= q6apm_dai_component_remove,
 	.open		= q6apm_dai_open,
 	.close		= q6apm_dai_close,
 	.prepare	= q6apm_dai_prepare,
@@ -1118,6 +1200,7 @@ static const struct snd_soc_component_driver q6apm_fe_dai_component = {
 	.ack		= q6apm_dai_ack,
 	.compress_ops	= &q6apm_dai_compress_ops,
 	.use_dai_pcm_id = true,
+	.remove_order   = SND_SOC_COMP_ORDER_EARLY,
 };
 
 static int q6apm_dai_probe(struct platform_device *pdev)
