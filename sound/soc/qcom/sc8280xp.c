@@ -323,8 +323,21 @@ static int sc8280xp_add_voice_links(struct snd_soc_card *card)
 	}
 	card->dai_link = links;
 	card->num_links = count + 2;
-	card->dapm_routes = voice_routes;
-	card->num_dapm_routes = ARRAY_SIZE(voice_routes);
+	if (card->num_dapm_routes > 0 && card->dapm_routes) {
+		struct snd_soc_dapm_route *new_routes;
+		int new_count = card->num_dapm_routes + ARRAY_SIZE(voice_routes);
+
+		new_routes = devm_kcalloc(card->dev, new_count, sizeof(*new_routes), GFP_KERNEL);
+		if (!new_routes)
+			return -ENOMEM;
+		memcpy(new_routes, card->dapm_routes, card->num_dapm_routes * sizeof(*new_routes));
+		memcpy(new_routes + card->num_dapm_routes, voice_routes, sizeof(voice_routes));
+		card->dapm_routes = new_routes;
+		card->num_dapm_routes = new_count;
+	} else {
+		card->dapm_routes = voice_routes;
+		card->num_dapm_routes = ARRAY_SIZE(voice_routes);
+	}
 	return 0;
 }
 
