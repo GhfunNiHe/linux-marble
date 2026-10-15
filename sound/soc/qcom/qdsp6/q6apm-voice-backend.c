@@ -24,6 +24,8 @@ void q6apm_voice_backend_close(struct snd_pcm_substream **stream)
 
 	if (!substream)
 		return;
+	snd_pcm_kernel_ioctl(substream, SNDRV_PCM_IOCTL_DROP, NULL);
+	snd_pcm_kernel_ioctl(substream, SNDRV_PCM_IOCTL_HW_FREE, NULL);
 	guard(mutex)(&substream->pcm->open_mutex);
 	snd_pcm_release_substream(substream);
 	*stream = NULL;
