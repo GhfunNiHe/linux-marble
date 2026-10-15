@@ -92,12 +92,15 @@ static void aw88261_dev_i2s_tx_enable(struct aw_device *aw_dev, bool flag)
 
 static void aw88261_dev_pwd(struct aw_device *aw_dev, bool pwd)
 {
-	if (pwd)
+	if (pwd) {
 		regmap_update_bits(aw_dev->regmap, AW88261_SYSCTRL_REG,
 				~AW88261_PWDN_MASK, AW88261_PWDN_POWER_DOWN_VALUE);
-	else
+		if (aw_dev->chip_id == AW88263S_CHIP_ID)
+			regmap_set_bits(aw_dev->regmap, AW88261_SYSCTRL_REG, BIT(15));
+	} else {
 		regmap_update_bits(aw_dev->regmap, AW88261_SYSCTRL_REG,
 				~AW88261_PWDN_MASK, AW88261_PWDN_WORKING_VALUE);
+	}
 }
 
 static void aw88261_dev_amppd(struct aw_device *aw_dev, bool amppd)
@@ -545,6 +548,8 @@ static int aw88261_dev_reg_update(struct aw88261 *aw88261,
 	/* keep min volume and mute */
 	aw88261_dev_set_volume(aw_dev, vol_desc->mute_volume);
 	aw88261_dev_mute(aw_dev, true);
+	if (aw_dev->chip_id == AW88263S_CHIP_ID)
+		regmap_set_bits(aw_dev->regmap, AW88261_SYSCTRL_REG, BIT(15));
 
 	return ret;
 }
