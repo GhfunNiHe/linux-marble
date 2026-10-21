@@ -46,8 +46,6 @@ static struct audioreach_graph *q6apm_get_audioreach_graph(struct q6apm *apm, ui
 	int id;
 
 	guard(mutex)(&apm->graph_lock);
-	if (READ_ONCE(apm->topology_uncertain))
-		return ERR_PTR(-EUCLEAN);
 	if (apm->hostless_owner)
 		return ERR_PTR(-EBUSY);
 	mutex_lock(&apm->lock);
@@ -99,7 +97,6 @@ static struct audioreach_graph *q6apm_get_audioreach_graph(struct q6apm *apm, ui
 	id = q6apm_send_cmd_sync(apm, graph->graph, 0);
 	if (id) {
 		mutex_lock(&apm->lock);
-		WRITE_ONCE(apm->topology_uncertain, true);
 		idr_remove(&apm->graph_idr, graph_id);
 		mutex_unlock(&apm->lock);
 		kfree(graph->graph);
@@ -151,8 +148,6 @@ static void q6apm_put_audioreach_graph(struct kref *ref)
 	ret = audioreach_graph_mgmt_cmd(graph, APM_CMD_GRAPH_CLOSE);
 
 	mutex_lock(&apm->lock);
-	if (ret)
-		WRITE_ONCE(apm->topology_uncertain, true);
 	graph = idr_remove(&apm->graph_idr, graph->id);
 	mutex_unlock(&apm->lock);
 
@@ -245,8 +240,6 @@ static int __q6apm_map_memory_fixed_region(struct device *dev, unsigned int grap
 		return PTR_ERR(pkt);
 
 	guard(mutex)(&apm->graph_lock);
-	if (READ_ONCE(apm->topology_uncertain))
-		return -EUCLEAN;
 	if (apm->hostless_owner)
 		return -EBUSY;
 	info = idr_find(&apm->graph_info_idr, graph_id);
@@ -282,8 +275,6 @@ static int __q6apm_map_memory_fixed_region(struct device *dev, unsigned int grap
 	ret = q6apm_send_cmd_sync(apm, pkt, APM_CMD_RSP_SHARED_MEM_MAP_REGIONS);
 	if (!ret && !(is_pos_buf ? info->pos_buf_mem_map_handle : info->mem_map_handle))
 		ret = -EPROTO;
-	if (ret)
-		WRITE_ONCE(apm->topology_uncertain, true);
 	return ret;
 }
 
@@ -358,15 +349,12 @@ static int __q6apm_unmap_memory_fixed_region(struct device *dev, unsigned int gr
 	struct q6apm *apm = dev_get_drvdata(dev->parent);
 	struct audioreach_graph_info *info;
 	uint32_t mem_map_handle;
-	int ret;
 	struct gpr_pkt *pkt __free(kfree) = audioreach_alloc_apm_cmd_pkt(sizeof(*cmd),
 						APM_CMD_SHARED_MEM_UNMAP_REGIONS, graph_id);
 	if (IS_ERR(pkt))
 		return PTR_ERR(pkt);
 
 	guard(mutex)(&apm->graph_lock);
-	if (READ_ONCE(apm->topology_uncertain))
-		return -EUCLEAN;
 	info = idr_find(&apm->graph_info_idr, graph_id);
 	if (!info)
 		return -ENODEV;
@@ -387,10 +375,7 @@ static int __q6apm_unmap_memory_fixed_region(struct device *dev, unsigned int gr
 	if (is_pos_buf)
 		pkt->hdr.token |= APM_MMAP_TOKEN_MAP_TYPE_POS_BUF;
 
-	ret = q6apm_send_cmd_sync(apm, pkt, APM_CMD_SHARED_MEM_UNMAP_REGIONS);
-	if (ret)
-		WRITE_ONCE(apm->topology_uncertain, true);
-	return ret;
+	return q6apm_send_cmd_sync(apm, pkt, APM_CMD_SHARED_MEM_UNMAP_REGIONS);
 }
 
 int q6apm_unmap_memory_fixed_region(struct device *dev, unsigned int graph_id)
@@ -835,7 +820,6 @@ EXPORT_SYMBOL_GPL(q6apm_graph_open);
 int q6apm_graph_close(struct q6apm_graph *graph)
 {
 	struct audioreach_graph *ar_graph = graph->ar_graph;
-	struct q6apm *apm = graph->apm;
 
 	/* A queued data/event callback may still use graph and its client context. */
 	gpr_free_port_sync(graph->port);
@@ -844,7 +828,7 @@ int q6apm_graph_close(struct q6apm_graph *graph)
 	kref_put(&ar_graph->refcount, q6apm_put_audioreach_graph);
 	kfree(graph);
 
-	return READ_ONCE(apm->topology_uncertain) ? -EUCLEAN : 0;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(q6apm_graph_close);
 
@@ -885,9 +869,7 @@ int q6apm_graph_stop(struct q6apm_graph *graph)
 	}
 
 	ret = audioreach_graph_mgmt_cmd(ar_graph, APM_CMD_GRAPH_STOP);
-	if (ret)
-		WRITE_ONCE(graph->apm->topology_uncertain, true);
-	else
+	if (!ret)
 		ar_graph->start_count = 0;
 	return ret;
 }
@@ -1039,7 +1021,6 @@ static int apm_callback(const struct gpr_resp_pkt *data, void *priv, int op)
 				else
 					info->mem_map_handle = 0;
 			} else {
-				WRITE_ONCE(apm->topology_uncertain, true);
 				if (!info)
 					apm->result.status = EINVAL;
 			}
