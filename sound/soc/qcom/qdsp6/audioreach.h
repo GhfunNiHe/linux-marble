@@ -390,11 +390,10 @@ struct data_cmd_rsp_rd_sh_mem_ep_data_buffer_done_v2 {
 	uint32_t timestamp_msw;
 	uint32_t flags;
 	uint32_t num_frames;
-	uint32_t md_status;
 	uint32_t md_buf_addr_lsw;
 	uint32_t md_buf_addr_msw;
 	uint32_t md_mem_map_handle;
-	uint32_t md_size;
+	uint32_t md_status;
 } __packed;
 
 #define PARAM_ID_RD_SH_MEM_CFG				0x08001007
