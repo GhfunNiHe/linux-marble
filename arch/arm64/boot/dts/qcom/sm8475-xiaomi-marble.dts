@@ -32,8 +32,8 @@
 	chassis-type = "handset";
 
 	/*
-	 * Battery/charger run in ADSP firmware (battmgr) over pmic_glink. No
-	 * usb-c-connector yet: usb_1_dwc3 stays dr_mode=peripheral for netboot.
+	 * Battery/charger run in ADSP firmware (battmgr) over pmic_glink.
+	 * The USB-C connector is dual-role; dwc3 defaults to peripheral.
 	 */
 	/*
 	 * BP4K / M16T 5000 mAh cell. The ADSP does not report a design
@@ -51,6 +51,26 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		monitored-battery = <&battery>;
+
+		connector@0 {
+			compatible = "usb-c-connector";
+			reg = <0>;
+			power-role = "dual";
+			data-role = "dual";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+
+					pmic_glink_hs_in: endpoint {
+						remote-endpoint = <&usb_1_dwc3_hs>;
+					};
+				};
+			};
+		};
 	};
 
 	/* QCA6490 (WCN6855 family, PCI 17cb:1103) wired as on sm8450-hdk */
@@ -865,6 +885,10 @@
 	vdda-pll-supply = <&pm8350c_l10>;
 };
 
+&usb_1_dwc3_hs {
+	remote-endpoint = <&pmic_glink_hs_in>;
+};
+
 &usb_1 {
 	/delete-property/ interconnects;
 	/delete-property/ interconnect-names;
@@ -872,7 +896,8 @@
 	qcom,select-utmi-as-pipe-clk;
 
 	/* v7.x: dwc3 core is flattened into the qcom glue node */
-	dr_mode = "peripheral";
+	dr_mode = "otg";
+	role-switch-default-mode = "peripheral";
 	maximum-speed = "high-speed";
 	phys = <&usb_1_hsphy>;
 	phy-names = "usb2-phy";
