@@ -304,6 +304,17 @@
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 
+		/*
+		 * CSIPHY 1.2 V rail (vendor L6B, 1.2-1.248 V). Kept at HPM
+		 * because every CSIPHY instance shares it.
+		 */
+		pm8350_l6: ldo6 {
+			regulator-name = "pm8350_l6";
+			regulator-min-microvolt = <1200000>;
+			regulator-max-microvolt = <1248000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+		};
+
 		pm8350_s10: smps10 {
 			regulator-name = "pm8350_s10";
 			regulator-min-microvolt = <1800000>;
@@ -452,6 +463,7 @@
 			regulator-min-microvolt = <1800000>;
 			regulator-max-microvolt = <1800000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
+			regulator-always-on;
 		};
 	};
 };
@@ -757,6 +769,7 @@
 				regulator-name = "pm8008j_l5";
 				regulator-min-microvolt = <1800000>;
 				regulator-max-microvolt = <1800000>;
+				regulator-always-on;
 			};
 
 			pm8008j_l6: ldo6 {
@@ -1371,6 +1384,9 @@
 		compatible = "sony,imx355";
 		reg = <0x1a>;
 
+		orientation = <1>; /* rear */
+		rotation = <90>;   /* stock sensor-position-roll */
+
 		power-domains = <&camcc TITAN_TOP_GDSC>;
 
 		clocks = <&camcc CAM_CC_MCLK1_CLK>;
@@ -1388,7 +1404,8 @@
 
 		port {
 			imx355_ep: endpoint {
-				data-lanes = <1 2 3 4>;
+				remote-endpoint = <&csiphy0_ep>;
+				data-lanes = <0 1 2 3>;
 				link-frequencies = /bits/ 64 <360000000>;
 			};
 		};
@@ -1397,4 +1414,34 @@
 
 &cci1 {
 	status = "okay";
+};
+
+/*
+ * Rear camera below the main lens, left of the flash: the Sony IMX355 above
+ * sits on CCI0 master 0 at 0x1a with MCLK1 and reset TLMM 24, which the stock
+ * DT places on CSIPHY0 (marble-sm7475-camera-sensor.dtsi: cam-sensor2,
+ * csiphy-sd-index = 0).
+ * CSIPHY rails follow the stock csiphy node: 0.88 V on L5B (pm8350_l5) and
+ * 1.2 V on pm8350c L10 (the stock dtbo's pm8350_l6 is the UFS PHY).
+ */
+&camss {
+	vdda-phy-supply = <&pm8350_l5>;
+	vdda-pll-supply = <&pm8350c_l10>;
+
+	/* vfe0/1/2 own an IFE GDSC each; the last one is the CAMSS block's own. */
+	power-domains = <&camcc IFE_0_GDSC>, <&camcc IFE_1_GDSC>,
+			<&camcc IFE_2_GDSC>, <&camcc TITAN_TOP_GDSC>;
+	power-domain-names = "ife0", "ife1", "ife2", "top";
+
+	status = "okay";
+
+	ports {
+		port@0 {
+			csiphy0_ep: endpoint {
+				data-lanes = <0 1 2 3>;
+				link-frequencies = /bits/ 64 <360000000>;
+				remote-endpoint = <&imx355_ep>;
+			};
+		};
+	};
 };
