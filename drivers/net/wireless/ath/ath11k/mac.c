@@ -8,6 +8,7 @@
 #include <net/cfg80211.h>
 #include <linux/etherdevice.h>
 #include <linux/bitfield.h>
+#include <linux/hex.h>
 #include <linux/inetdevice.h>
 #include <net/if_inet6.h>
 #include <net/ipv6.h>
@@ -10701,6 +10702,44 @@ err:
 	return ret;
 }
 
+static int ath11k_mac_read_wlan_mac(struct ath11k_base *ab, u8 *mac_addr)
+{
+	const struct firmware *fw;
+	char buf[6 + 2 * ETH_ALEN];
+	int ret;
+
+	fw = ath11k_core_firmware_request(ab, "wlan_mac.bin");
+	if (IS_ERR(fw))
+		return PTR_ERR(fw);
+
+	if (fw->size != sizeof(buf)) {
+		ath11k_warn(ab, "invalid size of wlan_mac.bin: %zu\n", fw->size);
+		ret = -EINVAL;
+		goto out;
+	}
+
+	memcpy(buf, fw->data, sizeof(buf));
+
+	if (strncmp(buf, "wlan0=", 6)) {
+		ath11k_warn(ab, "invalid prefix in wlan_mac.bin\n");
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = hex2bin(mac_addr, buf + 6, ETH_ALEN);
+	if (ret)
+		goto out;
+
+	if (!is_valid_ether_addr(mac_addr)) {
+		ath11k_warn(ab, "invalid MAC address in wlan_mac.bin\n");
+		ret = -EINVAL;
+	}
+
+out:
+	release_firmware(fw);
+	return ret;
+}
+
 int ath11k_mac_register(struct ath11k_base *ab)
 {
 	struct ath11k *ar;
@@ -10721,6 +10760,17 @@ int ath11k_mac_register(struct ath11k_base *ab)
 		return ret;
 
 	device_get_mac_address(ab->dev, mac_addr);
+
+	/* The WiFi chip sits on PCIe: neither the device tree nor the mainline
+	 * firmware blobs carry a MAC address for it, so mac_addr stays all-zero
+	 * and mac80211 hands every interface a random address (and NM's
+	 * "restore the permanent address" step then fails EADDRNOTAVAIL against
+	 * the zero perm_addr). Fall back to the factory MAC saved on the
+	 * persist partition, which marble-wlan-mac.service places in the
+	 * firmware directory before this driver is loaded.
+	 */
+	if (is_zero_ether_addr(mac_addr) && is_zero_ether_addr(ab->mac_addr))
+		ath11k_mac_read_wlan_mac(ab, mac_addr);
 
 	for (i = 0; i < ab->num_radios; i++) {
 		pdev = &ab->pdevs[i];
