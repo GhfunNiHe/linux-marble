@@ -1403,8 +1403,6 @@
 		orientation = <1>; /* rear */
 		rotation = <90>;   /* stock sensor-position-roll */
 
-		power-domains = <&camcc TITAN_TOP_GDSC>;
-
 		clocks = <&camcc CAM_CC_MCLK1_CLK>;
 		assigned-clocks = <&camcc CAM_CC_MCLK1_CLK>;
 		assigned-clock-rates = <19200000>;
