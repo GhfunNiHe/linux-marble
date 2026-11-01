@@ -1122,6 +1122,9 @@ static bool wcd_mbhc_check_for_spl_headset(struct wcd_mbhc *mbhc)
 
 	if (!mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic)
 		return false;
+	/* At an already high bias, settling contacts do not prove a bias-dependent mic. */
+	if (wcd_mbhc_get_micbias(mbhc) >= WCD_MBHC_THR_HS_MICB_MV)
+		return false;
 
 	/* Bump up MIC_BIAS2 to 2.7V */
 	mbhc->mbhc_cb->mbhc_micb_ctrl_thr_mic(mbhc->component, MIC_BIAS_2, true);
