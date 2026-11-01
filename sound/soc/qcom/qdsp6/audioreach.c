@@ -1030,6 +1030,7 @@ static int audioreach_codec_dma_set_media_format(struct q6apm_graph *graph,
 	int pm_sz = APM_HW_EP_PMODE_CFG_PSIZE;
 	int size = ic_sz + ep_sz + fs_sz + pm_sz;
 	void *p;
+	int ret;
 
 	struct gpr_pkt *pkt __free(kfree) = audioreach_alloc_apm_cmd_pkt(size, APM_CMD_SET_CFG, 0);
 	if (IS_ERR(pkt))
@@ -1079,7 +1080,13 @@ static int audioreach_codec_dma_set_media_format(struct q6apm_graph *graph,
 	param_data->param_size = pm_sz - APM_MODULE_PARAM_DATA_SIZE;
 	pm_cfg->power_mode.power_mode = 0;
 
-	return q6apm_send_cmd_sync(graph->apm, pkt, 0);
+	ret = q6apm_send_cmd_sync(graph->apm, pkt, 0);
+	dev_dbg(graph->dev,
+		"codec-dma iid %#x interface %u/%u rate %u width %u channels %u status %d\n",
+		module->instance_id, module->hw_interface_type,
+		module->hw_interface_idx, cfg->sample_rate, cfg->bit_width,
+		cfg->num_channels, ret);
+	return ret;
 }
 
 int audioreach_send_u32_param(struct q6apm_graph *graph,
@@ -1551,7 +1558,8 @@ static int audioreach_pcm_set_media_format(struct q6apm_graph *graph,
 	media_cfg->interleaved = module->interleave_type;
 	media_cfg->num_channels = mcfg->num_channels;
 	media_cfg->q_factor = mcfg->bit_width - 1;
-	media_cfg->bits_per_sample = mcfg->bit_width;
+	/* ALSA S24_LE carries 24 valid bits in a 32-bit word. */
+	media_cfg->bits_per_sample = mcfg->bit_width == 24 ? 32 : mcfg->bit_width;
 	memcpy(media_cfg->channel_mapping, mcfg->channel_map, mcfg->num_channels);
 
 	return q6apm_send_cmd_sync(graph->apm, pkt, 0);
@@ -1637,7 +1645,8 @@ static int audioreach_shmem_set_media_format(struct q6apm_graph *graph,
 		cfg->sample_rate = mcfg->sample_rate;
 		cfg->bit_width = mcfg->bit_width;
 		cfg->alignment = PCM_LSB_ALIGNED;
-		cfg->bits_per_sample = mcfg->bit_width;
+		/* ALSA S24_LE carries 24 valid bits in a 32-bit word. */
+		cfg->bits_per_sample = mcfg->bit_width == 24 ? 32 : mcfg->bit_width;
 		cfg->q_factor = mcfg->bit_width - 1;
 		cfg->endianness = PCM_LITTLE_ENDIAN;
 		cfg->num_channels = mcfg->num_channels;
