@@ -25,6 +25,7 @@
 #define WCD_MBHC_ADC_HPH_THRESHOLD_MV	75
 #define WCD_MBHC_ADC_MICBIAS_MV		1800
 #define WCD_MBHC_FAKE_INS_RETRY		4
+#define WCD_MBHC_HEADSET_CONFIRM_COUNT	2
 
 #define WCD_MBHC_JACK_MASK (SND_JACK_HEADSET | SND_JACK_LINEOUT | \
 			   SND_JACK_MECHANICAL)
@@ -1147,6 +1148,20 @@ static bool wcd_mbhc_check_for_spl_headset(struct wcd_mbhc *mbhc)
 	return is_spl_hs;
 }
 
+static void wcd_mbhc_report_deferred_headset(struct wcd_mbhc *mbhc)
+{
+	mutex_lock(&mbhc->lock);
+	if (!mbhc->hs_detect_work_stop &&
+	    mbhc->current_plug == MBHC_PLUG_TYPE_NONE) {
+		wcd_mbhc_report_plug(mbhc, 1, SND_JACK_HEADSET);
+		wcd_mbhc_write_field(mbhc, WCD_MBHC_ADC_MODE, 0);
+		wcd_mbhc_write_field(mbhc, WCD_MBHC_ADC_EN, 0);
+		wcd_mbhc_write_field(mbhc, WCD_MBHC_DETECTION_DONE, 1);
+		wcd_mbhc_bcs_enable(mbhc, MBHC_PLUG_TYPE_HEADSET, false);
+	}
+	mutex_unlock(&mbhc->lock);
+}
+
 static void wcd_correct_swch_plug(struct work_struct *work)
 {
 	struct wcd_mbhc *mbhc;
@@ -1154,9 +1169,11 @@ static void wcd_correct_swch_plug(struct work_struct *work)
 	enum wcd_mbhc_plug_type plug_type = MBHC_PLUG_TYPE_INVALID;
 	unsigned long timeout;
 	int pt_gnd_mic_swap_cnt = 0;
+	int headset_confirm_count = 0;
 	int output_mv, cross_conn, hs_threshold, try = 0, micbias_mv;
 	bool is_spl_hs = false;
 	bool is_pa_on;
+	bool deferred_headset = false;
 	int ret;
 
 	mbhc = container_of(work, struct wcd_mbhc, correct_plug_swch);
@@ -1192,6 +1209,7 @@ static void wcd_correct_swch_plug(struct work_struct *work)
 	/* Find plug type */
 	output_mv = wcd_measure_adc_continuous(mbhc);
 	plug_type = wcd_mbhc_get_plug_from_adc(mbhc, output_mv);
+	deferred_headset = plug_type == MBHC_PLUG_TYPE_HIGH_HPH;
 
 	/*
 	 * Report plug type if it is either headset or headphone
@@ -1232,6 +1250,9 @@ correct_plug_type:
 		output_mv = wcd_measure_adc_once(mbhc, MUX_CTL_IN2P);
 		plug_type = wcd_mbhc_get_plug_from_adc(mbhc, output_mv);
 		is_pa_on = wcd_mbhc_read_field(mbhc, WCD_MBHC_HPH_PA_EN);
+		if (output_mv < 0 || plug_type != MBHC_PLUG_TYPE_HEADSET ||
+		    is_pa_on || is_spl_hs || mbhc->force_linein)
+			headset_confirm_count = 0;
 
 		if (output_mv > hs_threshold && !is_spl_hs) {
 			is_spl_hs = wcd_mbhc_check_for_spl_headset(mbhc);
@@ -1247,17 +1268,35 @@ correct_plug_type:
 			/* Check for cross connection*/
 			cross_conn = wcd_check_cross_conn(mbhc);
 			if (cross_conn > 0) { /* cross-connection */
+				headset_confirm_count = 0;
 				pt_gnd_mic_swap_cnt++;
 				if (pt_gnd_mic_swap_cnt < mbhc->swap_thr)
 					continue;
-				else
+				else {
 					plug_type = MBHC_PLUG_TYPE_GND_MIC_SWAP;
+					deferred_headset = false;
+				}
 			} else if (!cross_conn) { /* no cross connection */
 				pt_gnd_mic_swap_cnt = 0;
 				plug_type = wcd_mbhc_get_plug_from_adc(mbhc, output_mv);
+				/*
+				 * Initial high impedance may just be contacts settling.
+				 * Two clean samples, 180 ms apart, establish a headset
+				 * without waiting for the entire correction window.
+				 * Keep correcting afterwards, as with an initial headset.
+				 */
+				if (deferred_headset && !is_spl_hs &&
+				    !mbhc->force_linein &&
+				    plug_type == MBHC_PLUG_TYPE_HEADSET &&
+				    ++headset_confirm_count >= WCD_MBHC_HEADSET_CONFIRM_COUNT) {
+					wcd_mbhc_report_deferred_headset(mbhc);
+					deferred_headset = false;
+				}
 				continue;
-			} else /* Error if (cross_conn < 0) */
+			} else { /* Error if (cross_conn < 0) */
+				headset_confirm_count = 0;
 				continue;
+			}
 
 			if (pt_gnd_mic_swap_cnt == mbhc->swap_thr) {
 				/* US_EU gpio present, flip switch */
