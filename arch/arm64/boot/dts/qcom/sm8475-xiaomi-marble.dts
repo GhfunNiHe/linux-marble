@@ -273,7 +273,8 @@
 		qcom,micbias3-microvolt = <2750000>;
 		qcom,micbias4-microvolt = <2750000>;
 		qcom,mbhc-buttons-vthreshold-microvolt = <75000 150000 237000 500000 500000 500000 500000 500000>;
-		qcom,mbhc-headset-vthreshold-microvolt = <1700000>;
+		/* Scale the 1.7 V / 1.8 V reference threshold for our 2.75 V bias. */
+		qcom,mbhc-headset-vthreshold-microvolt = <2600000>;
 		qcom,mbhc-headphone-vthreshold-microvolt = <50000>;
 		qcom,rx-device = <&wcd_rx>;
 		qcom,tx-device = <&wcd_tx>;
@@ -1257,8 +1258,10 @@
 	qcom,tdm-rate = <96000>;
 	qcom,tdm-format = "dsp_a";
 
-	/* Analog mics on the WCD9385; ADCs feed the TX macro over SoundWire */
-	audio-routing = "AMIC1", "MIC BIAS1",
+	/* WCD9385 headphones and analog mics use the RX/TX SoundWire macros. */
+	audio-routing = "IN1_HPHL", "HPHL_OUT",
+			"IN2_HPHR", "HPHR_OUT",
+			"AMIC1", "MIC BIAS1",
 			"AMIC2", "MIC BIAS2",
 			"AMIC3", "MIC BIAS3",
 			"AMIC4", "MIC BIAS3",
@@ -1266,6 +1269,22 @@
 			"TX SWR_INPUT1", "ADC2_OUTPUT",
 			"TX SWR_INPUT0", "ADC3_OUTPUT",
 			"TX SWR_INPUT1", "ADC4_OUTPUT";
+
+	wcd-playback-dai-link {
+		link-name = "WCD Playback";
+
+		cpu {
+			sound-dai = <&q6apmbedai RX_CODEC_DMA_RX_0>;
+		};
+
+		codec {
+			sound-dai = <&wcd938x 0>, <&swr1 0>, <&rxmacro 0>;
+		};
+
+		platform {
+			sound-dai = <&q6apm>;
+		};
+	};
 
 	wcd-capture-dai-link {
 		link-name = "WCD Capture";
