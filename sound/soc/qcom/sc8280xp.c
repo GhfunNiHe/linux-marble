@@ -150,6 +150,13 @@ static int sc8280xp_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 					SNDRV_PCM_HW_PARAM_CHANNELS);
 	struct snd_mask *fmt = hw_param_mask(params, SNDRV_PCM_HW_PARAM_FORMAT);
 
+	/* The marble headphone graph follows its frontend's negotiated format. */
+	if (of_machine_is_compatible("xiaomi,marble") &&
+	    cpu_dai->id == RX_CODEC_DMA_RX_0) {
+		channels->min = channels->max = 2;
+		return 0;
+	}
+
 	rate->min = rate->max = 48000;
 	snd_mask_set_format(fmt, SNDRV_PCM_FORMAT_S16_LE);
 	channels->min = 2;

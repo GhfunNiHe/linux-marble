@@ -5,6 +5,7 @@
 #include <linux/err.h>
 #include <linux/init.h>
 #include <linux/module.h>
+#include <linux/of.h>
 #include <linux/device.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
@@ -357,6 +358,23 @@ static int q6apm_lpass_dai_dev_probe(struct platform_device *pdev)
 	cfg.q6dma_ops = &q6dma_ops;
 	cfg.q6hdmi_ops = &q6hdmi_ops;
 	dais = q6dsp_audio_ports_set_config(dev, &cfg, &num_dais);
+
+	/* The common table is shared: extend only marble's RX0 instance. */
+	if (of_machine_is_compatible("xiaomi,marble")) {
+		int i;
+
+		dais = devm_kmemdup(dev, dais, sizeof(*dais) * num_dais,
+				    GFP_KERNEL);
+		if (!dais)
+			return -ENOMEM;
+		for (i = 0; i < num_dais; i++) {
+			if (dais[i].id != RX_CODEC_DMA_RX_0)
+				continue;
+			dais[i].playback.rates |= SNDRV_PCM_RATE_96000 |
+						  SNDRV_PCM_RATE_192000;
+			dais[i].playback.rate_max = 192000;
+		}
+	}
 
 	return devm_snd_soc_register_component(dev, &q6apm_lpass_dai_component, dais, num_dais);
 }
